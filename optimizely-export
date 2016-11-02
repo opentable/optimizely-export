@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+
+import hashlib
+import io
+import os
+import shutil
+import sys
+
+from argparse import ArgumentParser, RawDescriptionHelpFormatter
+from getpass import getpass
+
+# See the readme and requirements.txt.
+import boto3
+import yaml
+
+# Entry point is Main.run, invoked at bottom.
+
+# For a bit of sanity, we try to call string S3 keys "paths" and call
+# the boto3 Key objects "keys".
+
+def log(x):
+  sys.stderr.write('%s\n' % x)
+  sys.stderr.flush()
+
+# Little class to store state and logic for showing a progress bar on
+# standard error. The boto3 API calls an update function with the amount
+# of bytes just transferred, not transferred in total. Therefore, we
+# have to do a little bit of state storage on our side to show a
+# progress bar.  Pass the bound update method as the boto3 callback.
+class Progress(object):
+  def __init__(self, total):
+    self.total = total
+    self.sofar = 0
+
+  # Initialize output by clearing a new line for the progress bar.
+  def init(self):
+    sys.stderr.write('\n')
+    sys.stderr.flush()
+
+  def show(self):
+    sys.stderr.write('\r')
+    columns, lines = shutil.get_terminal_size()
+    barwidth = columns - 10
+    p = self.sofar / self.total
+    full = int(round(p * barwidth))
+    empty = barwidth - full
+    pct = '%6.2f%%' % (100 * p)
+    sys.stderr.write('|' + full * '#' + empty * '.' + '| ' + pct)
+    if p == 1: sys.stderr.write('\n')
+    sys.stderr.flush()
+
+  def update(self, delta):
+    self.sofar += delta
+    self.show()
+
+class Main(object):
+  def __init__(self):
+    descr = '''
+    %(prog)s downloads raw Optimizely experiment data from S3.
+
+    You may provide S3 credentials either via boto3's avenues (see
+    the Usage section of the readme for a link to more detail), or
+    provide them interactively by passing the `-i` option.
+
+    An Optimizely account ID is required in order to perform the
+    broadest filtration of what experiments to download. If this is
+    all you provide, then all experiments under all projects for
+    that account will be downloaded. Supplying a project ID will
+    filter the experiments to be downloaded to those under that
+    project only, and further supplying an experiment ID will
+    download raw data for just that experiment.
+
+    By default, status will be printed to standard error, and if
+    standard error is a terminal, a progress bar will be printed
+    there as well as files are downloaded.  You may silence this
+    status with the `-q` option.
+
+    Files are downloaded to the current working directory. If a file
+    already exists, its MD5 checksum will be checked against the
+    remote copy. If this check fails, the file will be downloaded
+    again. You may avoid downloading any new experiment files by
+    passing `-d` to perform a dry run.
+
+    For each remote file passing the filtration, one of three lines
+    will be printed to standard output; either that the local file's
+    contents were verified via the MD5 checksum, that the file was
+    downloaded, or that the file's download was skipped (in the case
+    of a dry run). After download, a file's checksum is checked; if
+    it fails, an exception will be thrown and the process will
+    consequently terminate.
+    '''
+
+    parser = ArgumentParser(description=descr,
+      formatter_class=RawDescriptionHelpFormatter)
+    parser.add_argument('-i', '--interactive', action='store_true',
+      help='interactively prompt for s3 credentials')
+    parser.add_argument('-q', '--quiet', action='store_true',
+      help='disable download progress to standard error')
+    parser.add_argument('-d', '--dry-run', action='store_true',
+      help='do not download any new experiment files')
+    parser.add_argument('accountid', type=int, help='optimizely account id')
+    parser.add_argument('projectid', type=int, nargs='?',
+      help='optimizely project id')
+    parser.add_argument('experimentid', type=int, nargs='?',
+      help='optimizely experiment id')
+    args = parser.parse_args()
+
+    self.handlecreds(args)
+    self.quiet = args.quiet
+    self.dryrun = args.dry_run
+
+    # We will enact account ID and (optionally) project ID filtering by
+    # use of this prefix variable.  Experiment ID filtering is done when
+    # reading the successful exports from the status file.  See the run
+    # method.
+    self.prefix = '%s/' % args.accountid
+    if args.projectid: self.prefix += '%s/' % args.projectid
+
+    self.experimentid = args.experimentid
+
+  def handlecreds(self, args):
+    if args.interactive:
+      self.aws_access_key_id = getpass('AWS Access Key ID: ')
+      self.aws_secret_access_key = getpass('AWS Secret Access Key: ')
+      return
+
+    # In this case, we'll rely on the boto3 credential setup.  See the
+    # Usage section of the readme.
+    self.aws_access_key_id = None
+    self.aws_secret_access_key = None
+
+  def log(self, x):
+    if self.quiet: return
+    log(x)
+
+  def isstatus(self, key):
+    return key.key.endswith('/status.yaml')
+
+  def getyaml(self, bucket, key):
+    f = io.BytesIO()
+    try:
+      bucket.download_fileobj(key.key, f)
+      f.seek(0)
+      return yaml.load(f)
+    finally: f.close()
+
+  def hashfile(self, f):
+    # Props to http://stackoverflow.com/a/3431838 for the iter idea.
+    md5 = hashlib.md5()
+    for chunk in iter(lambda: f.read(65536), b''):
+      md5.update(chunk)
+    return md5
+
+  def download(self, f, bucket, exportpath,
+      contentlength, remotehexdigest, exportname):
+    self.log('downloading %s' % exportname)
+
+    if not sys.stderr.isatty() or self.quiet: txcb = None
+    else:
+      prog = Progress(contentlength)
+      prog.show() # Show initial 0% progress.
+      txcb = prog.update
+
+    bucket.download_fileobj(exportpath, f, Callback=txcb)
+
+    f.flush()
+    os.fsync(f.fileno())
+
+    # Make sure we got it; otherwise, blow up.
+    f.seek(0)
+    localhexdigest = self.hashfile(f).hexdigest()
+    if localhexdigest != remotehexdigest:
+      raise Exception('export download %s md5 verification failed; '
+        'remote %s, local %s' % (exportpath, remotehexdigest, localhexdigest))
+    print('downloaded', exportname)
+
+  def ensuredownload(self, bucket, statuskey, exportname):
+    basepath = statuskey.key.rsplit('/', 1)[0]
+    exportpath = '%s/%s' % (basepath, exportname)
+    obj = bucket.Object(exportpath)
+    remotehexdigest = obj.e_tag[1:-1] # Includes " quotes; dumb.
+    contentlength = obj.content_length
+
+    try:
+      with open(exportname, 'x+b') as f:
+        self.download(f, bucket, exportpath,
+          contentlength, remotehexdigest, exportname)
+
+    except FileExistsError:
+      with open(exportname, 'r+b') as f:
+        if self.hashfile(f).hexdigest() == remotehexdigest:
+          print('verified', exportname)
+          return
+
+        self.log('verification failed for %s' % exportname)
+        f.truncate(0)
+        f.seek(0)
+        self.download(f, bucket, exportpath,
+          contentlength, remotehexdigest, exportname)
+
+  def run(self):
+    session = boto3.session.Session(
+      aws_access_key_id=self.aws_access_key_id,
+      aws_secret_access_key=self.aws_secret_access_key,
+      )
+    bucket = session.resource('s3').Bucket('optimizely-export')
+
+    for statuskey in bucket.objects.filter(Prefix=self.prefix):
+      if not self.isstatus(statuskey): continue
+      status = self.getyaml(bucket, statuskey)
+
+      for exportname in status['successful_exports']:
+        if self.experimentid:
+          experimentid = int(exportname.split('-', 1)[0])
+          if experimentid != self.experimentid:
+            self.log('ignoring %s' % exportname)
+            continue
+
+        if self.dryrun:
+          print('skipped', exportname)
+          continue
+        self.ensuredownload(bucket, statuskey, exportname)
+
+try: Main().run()
+except EOFError:
+  log('unexpected eof')
+  sys.exit(3)
+except KeyboardInterrupt:
+  log('caught interrupt')
+  sys.exit(128 + 2)
