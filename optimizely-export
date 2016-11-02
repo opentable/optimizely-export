@@ -32,11 +32,6 @@ class Progress(object):
     self.total = total
     self.sofar = 0
 
-  # Initialize output by clearing a new line for the progress bar.
-  def init(self):
-    sys.stderr.write('\n')
-    sys.stderr.flush()
-
   def show(self):
     sys.stderr.write('\r')
     columns, lines = shutil.get_terminal_size()
