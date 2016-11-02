@@ -90,7 +90,7 @@ class Main(object):
     parser.add_argument('-i', '--interactive', action='store_true',
       help='interactively prompt for s3 credentials')
     parser.add_argument('-q', '--quiet', action='store_true',
-      help='disable download progress to standard error')
+      help='disable status & download progress to standard error')
     parser.add_argument('-d', '--dry-run', action='store_true',
       help='do not download any new experiment files')
     parser.add_argument('accountid', type=int, help='optimizely account id')
