@@ -1,0 +1,40 @@
+Date: Wed, 3 May 2017 11:01:07 -0500 (CDT)
+From: Optimizely <updates@optimizely.com>
+Subject: [Action Required] Raw Data Export X Changes
+
+As part of scheduled work to improve the performance and reliability of
+our Data Export feature for Optimizely X, we are making changes to the
+way you access your Optimizely X raw data files.
+
+*Action Required*
+Please modify your raw data import process to use the new AWS bucket
+name, folder path and file naming structure by following the
+instructions below.  Note that we will stop generating raw data in the
+current AWS bucket after July 14th, 2017.
+
+Migration Step
+
+- Update your raw data import process to use the AWS bucket name
+  optimizely-export-ng/
+- Update the read folder to
+  account_id/project_id/2.0/yyyy/mm/dd/experiment_id/
+  (e.g, 123456789/234567890/2.0/2017/04/06/987654321/)
+- In the new AWS bucket, the raw data is now stored in multiple file
+  parts as opposed to a single file, which is the case in the current
+  bucket. The file parts use the following naming structure:
+  experiment_id-filepartnum-yyyy-mm-dd-r-reducernum.gz
+  (e.g. 987654321-0-2017-03-06-r-00062.gz). Update your process to
+  extract and read the file parts. Please note the following
+  conventions:
+      - The unzipped files do not have any file extension, but use the
+        same tsv format.
+      - There are up to 30 file parts per experiment per day
+        (filepartnum = 0-29).
+
+Complete instructions on changes to Optimizely's Data Export and FAQs
+can be found here <http://go.optimizely.com/JE1sGX0RzR09zoO0w8000z0>. If
+you have any questions, please direct them to Optimizely Support or let
+me know directly.
+
+Sincerely,
+The Optimizely Team

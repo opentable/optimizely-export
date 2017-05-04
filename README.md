@@ -1,3 +1,9 @@
+Compatibility
+-------------
+On May 4, 2017, Optimizely sent out a notice regarding a change in the
+format of the raw dumps.  As of this date, the described updates have
+not been made to this tool.  See `compat.txt` for more detail.
+
 Dependencies
 ------------
 - Python 3, and Pip for Python 3 ("`pip3`").
@@ -24,6 +30,11 @@ provide them.
 
 Invoke `optimizely-export`.  Pass the `-h` option to get a fuller
 description and explanation of options and arguments.
+
+TODO
+----
+- Update for new Optimizely raw dump formatting (see "Compatibility",
+  above).
 
 Future Work
 -----------
